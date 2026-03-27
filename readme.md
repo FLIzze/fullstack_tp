@@ -2,7 +2,7 @@
 
 ---
 
-## 🚀 Installation & démarrage
+## Installation & démarrage
 
 ```bash
 bun install
@@ -46,7 +46,7 @@ OK (204)
 OK (404)
 {"success":false,"message":"Utilisateur non trouvé"}
 ----------------------
-🔴 TESTS D'ERREURS
+TESTS D'ERREURS
 POST sans name/email
 ./tests.sh: line 13: [: {"success":false,"message":"Les: integer expected
 OK ({"success":false,"message":"Les)
