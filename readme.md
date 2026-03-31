@@ -1,11 +1,13 @@
 # TP 2, 3, 4 - Fullstack
 
-`.env` root:
+`.env`
 
 ```bash
 MONGO_URI=mongodb://localhost:27017/tp_seance3
 PORT=3001
 ```
+
+Pour lancer le back/front
 
 ```bash
 docker compose up --build
