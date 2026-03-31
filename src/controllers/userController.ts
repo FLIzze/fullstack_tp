@@ -1,161 +1,176 @@
-import { Request, Response } from "express";
-import * as UserModel from "../models/userModel";
+import { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
+import User from "../models/userModel";
 import { CreateUserDTO, UpdateUserDTO } from "../types/user";
+import { HttpError } from "../utils/httpError";
 
-export function getAllUsers(req: Request, res: Response): void {
+export async function getAllUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   const role = req.query.role as string | undefined;
+  const search = req.query.search as string | undefined;
+  const pageRaw = req.query.page as string | undefined;
+  const limitRaw = req.query.limit as string | undefined;
 
   if (role && role !== "admin" && role !== "user") {
-    res.status(400).json({
-      success: false,
-      message: "Paramètre 'role' invalide. Valeurs acceptées : admin | user",
-    });
-    return;
+    return next(
+      new HttpError(400, "Paramètre 'role' invalide. Valeurs acceptées : admin | user")
+    );
   }
 
-  const users = UserModel.getAll(role);
+  try {
+    const filter: Record<string, unknown> = {};
+    if (role) filter.role = role;
+    if (search) filter.name = new RegExp(search, "i");
 
-  res.status(200).json({
-    success: true,
-    count: users.length,
-    data: users,
-  });
+    const paginationEnabled = pageRaw !== undefined || limitRaw !== undefined;
+
+    if (!paginationEnabled) {
+      const users = await User.find(filter).lean();
+      res.status(200).json({
+        success: true,
+        count: users.length,
+        data: users,
+      });
+      return;
+    }
+
+    const page = pageRaw ? Number.parseInt(pageRaw, 10) : 1;
+    const limit = limitRaw ? Number.parseInt(limitRaw, 10) : 10;
+
+    if (!Number.isFinite(page) || page < 1) return next(new HttpError(400, "Paramètre 'page' invalide"));
+    if (!Number.isFinite(limit) || limit < 1) return next(new HttpError(400, "Paramètre 'limit' invalide"));
+
+    const totalCount = await User.countDocuments(filter);
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const skip = (page - 1) * limit;
+
+    const users = await User.find(filter).skip(skip).limit(limit).lean();
+    res.status(200).json({
+      success: true,
+      page,
+      limit,
+      totalCount,
+      totalPages,
+      count: users.length,
+      data: users,
+    });
+  } catch (err) {
+    next(err);
+  }
 }
 
-export function getUserById(req: Request, res: Response): void {
-  const id = parseInt(req.params.id, 10);
+export async function getUserById(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const id = req.params.id;
 
-  if (isNaN(id)) {
-    res.status(400).json({ success: false, message: "L'id doit être un nombre entier" });
-    return;
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new HttpError(400, "ObjectId invalide"));
   }
 
-  const user = UserModel.getById(id);
+  try {
+    const user = await User.findById(id).lean();
 
-  if (!user) {
-    res.status(404).json({ success: false, message: "Utilisateur non trouvé" });
-    return;
+    if (!user) {
+      return next(new HttpError(404, "Utilisateur non trouvé"));
+    }
+
+    res.status(200).json({ success: true, data: user });
+  } catch (err) {
+    next(err);
   }
-
-  res.status(200).json({ success: true, data: user });
 }
 
 // ----------------------------------------------------------
 //  POST /api/users
 //  Crée un nouvel utilisateur
 // ----------------------------------------------------------
-export function createUser(req: Request, res: Response): void {
+export async function createUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   const { name, email, role } = req.body as Partial<CreateUserDTO>;
 
   // Validation : champs obligatoires
   if (!name || !email) {
-    res.status(400).json({
-      success: false,
-      message: "Les champs 'name' et 'email' sont obligatoires",
-    });
-    return;
+    return next(new HttpError(400, "Les champs 'name' et 'email' sont obligatoires"));
   }
 
   // Validation basique du format email
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    res.status(400).json({ success: false, message: "Format d'email invalide" });
-    return;
-  }
-
-  // Bonus B : vérifier l'unicité de l'email
-  if (UserModel.emailExists(email)) {
-    res.status(409).json({
-      success: false,
-      message: "Cet email est déjà utilisé par un autre utilisateur",
-    });
-    return;
+    return next(new HttpError(400, "Format d'email invalide"));
   }
 
   // Validation du rôle si fourni
   if (role && role !== "admin" && role !== "user") {
-    res.status(400).json({
-      success: false,
-      message: "Le champ 'role' doit être 'admin' ou 'user'",
-    });
-    return;
+    return next(new HttpError(400, "Le champ 'role' doit être 'admin' ou 'user'"));
   }
 
-  const newUser = UserModel.create({ name, email, role });
-
-  res.status(201).json({ success: true, data: newUser });
+  try {
+    const newUser = await User.create({ name, email, role });
+    res.status(201).json({ success: true, data: newUser });
+  } catch (err) {
+    next(err);
+  }
 }
 
 // ----------------------------------------------------------
 //  PUT /api/users/:id
 //  Met à jour partiellement un utilisateur
 // ----------------------------------------------------------
-export function updateUser(req: Request, res: Response): void {
-  const id = parseInt(req.params.id, 10);
+export async function updateUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const id = req.params.id;
 
-  if (isNaN(id)) {
-    res.status(400).json({ success: false, message: "L'id doit être un nombre entier" });
-    return;
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new HttpError(400, "ObjectId invalide"));
   }
 
-  // Vérifier que la ressource existe
-  if (!UserModel.getById(id)) {
-    res.status(404).json({ success: false, message: "Utilisateur non trouvé" });
-    return;
-  }
+  const { name, email, role } = req.body as Partial<UpdateUserDTO> & {
+    _id?: unknown;
+    createdAt?: unknown;
+  };
 
-  const { name, email, role } = req.body as Partial<UpdateUserDTO>;
-
-  // Bonus B : vérifier l'unicité de l'email (en excluant l'utilisateur courant)
   if (email) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      res.status(400).json({ success: false, message: "Format d'email invalide" });
-      return;
-    }
-    if (UserModel.emailExists(email, id)) {
-      res.status(409).json({
-        success: false,
-        message: "Cet email est déjà utilisé par un autre utilisateur",
-      });
-      return;
+      return next(new HttpError(400, "Format d'email invalide"));
     }
   }
 
-  // Validation du rôle si fourni
   if (role && role !== "admin" && role !== "user") {
-    res.status(400).json({
-      success: false,
-      message: "Le champ 'role' doit être 'admin' ou 'user'",
-    });
-    return;
+    return next(new HttpError(400, "Le champ 'role' doit être 'admin' ou 'user'"));
   }
 
-  // Construire le payload de mise à jour (uniquement les champs fournis)
-  const updateData: UpdateUserDTO = {};
+  const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (email !== undefined) updateData.email = email;
   if (role !== undefined) updateData.role = role;
 
-  const updatedUser = UserModel.update(id, updateData);
+  try {
+    const updatedUser = await User.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+    }).lean();
 
-  res.status(200).json({ success: true, data: updatedUser });
+    if (!updatedUser) {
+      return next(new HttpError(404, "Utilisateur non trouvé"));
+    }
+
+    res.status(200).json({ success: true, data: updatedUser });
+  } catch (err) {
+    next(err);
+  }
 }
 
-export function deleteUser(req: Request, res: Response): void {
-  const id = parseInt(req.params.id, 10);
+export async function deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const id = req.params.id;
 
-  if (isNaN(id)) {
-    res.status(400).json({ success: false, message: "L'id doit être un nombre entier" });
-    return;
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new HttpError(400, "ObjectId invalide"));
   }
 
-  const deleted = UserModel.remove(id);
-
-  if (!deleted) {
-    res.status(404).json({ success: false, message: "Utilisateur non trouvé" });
-    return;
+  try {
+    const deleted = await User.findByIdAndDelete(id).lean();
+    if (!deleted) {
+      return next(new HttpError(404, "Utilisateur non trouvé"));
+    }
+    res.status(204).send();
+  } catch (err) {
+    next(err);
   }
-
-  res.status(204).send();
 }

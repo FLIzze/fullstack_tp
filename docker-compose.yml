@@ -1,0 +1,38 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: tp2-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: tp2-backend
+    environment:
+      PORT: "3001"
+      MONGO_URI: "mongodb://mongo:27017/tp_seance3"
+      AUTO_SEED: "true"
+    ports:
+      - "3001:3001"
+    depends_on:
+      - mongo
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tp2-frontend
+    environment:
+      VITE_PROXY_TARGET: "http://backend:3001"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:
+

@@ -2,8 +2,13 @@
 
 BASE_URL="http://localhost:3001/api/users"
 
+set -euo pipefail
+
 echo "Lancement des tests API"
 echo "===================================="
+
+# Dépendances
+command -v jq >/dev/null 2>&1 || { echo "ERREUR: jq est requis pour ce script"; exit 1; }
 
 # Générer un email unique pour éviter conflits CI
 EMAIL="bob$(date +%s)@example.com"
@@ -15,6 +20,16 @@ check_status() {
     exit 1
   else
     echo "OK ($1)"
+  fi
+}
+
+# Petit helper: vérifier qu'une clé JSON existe
+assert_jq_key() {
+  local key="$1"
+  if ! jq -e "$key" response.json >/dev/null 2>&1; then
+    echo "ERREUR: clé JSON manquante ou invalide: $key"
+    cat response.json || true
+    exit 1
   fi
 }
 
@@ -33,7 +48,7 @@ CREATE_RESPONSE=$(curl -s -X POST $BASE_URL \
 
 echo $CREATE_RESPONSE
 
-USER_ID=$(echo $CREATE_RESPONSE | jq -r '.data.id // .id')
+USER_ID=$(echo $CREATE_RESPONSE | jq -r '.data._id // .data.id // .id')
 
 if [ "$USER_ID" = "null" ] || [ -z "$USER_ID" ]; then
   echo "Erreur création utilisateur"
@@ -68,8 +83,28 @@ cat response.json
 echo -e "\n----------------------"
 
 # =========================
+echo "5b. GET /api/users?page=1&limit=2 (pagination)"
+STATUS=$(curl -s -o response.json -w "%{http_code}" "$BASE_URL?page=1&limit=2")
+check_status $STATUS 200
+assert_jq_key '.page'
+assert_jq_key '.limit'
+assert_jq_key '.totalCount'
+assert_jq_key '.totalPages'
+assert_jq_key '.data | length'
+cat response.json
+echo -e "\n----------------------"
+
+# =========================
+echo "5c. GET /api/users?search=ali (recherche)"
+STATUS=$(curl -s -o response.json -w "%{http_code}" "$BASE_URL?search=ali")
+check_status $STATUS 200
+jq -e '.data | map(.name) | any(test("Alice"; "i"))' response.json >/dev/null
+cat response.json
+echo -e "\n----------------------"
+
+# =========================
 echo "6. DELETE /api/users/:id"
-STATUS=$(curl -s -X DELETE $BASE_URL/$USER_ID -w "%{http_code}")
+STATUS=$(curl -s -X DELETE $BASE_URL/$USER_ID -o /dev/null -w "%{http_code}")
 check_status $STATUS 204
 echo "----------------------"
 
@@ -84,24 +119,48 @@ echo -e "\n----------------------"
 echo "TESTS D'ERREURS"
 
 echo "POST sans name/email"
-STATUS=$(curl -s -X POST $BASE_URL \
+STATUS=$(curl -s -X POST $BASE_URL -o /dev/null \
   -H "Content-Type: application/json" \
   -d '{}' \
   -w "%{http_code}")
 check_status $STATUS 400
 
+echo "POST email déjà existant (409 attendu)"
+STATUS=$(curl -s -X POST $BASE_URL -o /dev/null \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice Clone","email":"alice@example.com","role":"user"}' \
+  -w "%{http_code}")
+check_status $STATUS 409
+
 echo "GET utilisateur inexistant"
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE_URL/9999)
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE_URL/000000000000000000000000)
 check_status $STATUS 404
 
 echo "PUT utilisateur inexistant"
-STATUS=$(curl -s -X PUT $BASE_URL/9999 \
+STATUS=$(curl -s -X PUT $BASE_URL/000000000000000000000000 -o /dev/null \
   -H "Content-Type: application/json" \
   -d '{"role":"admin"}' \
   -w "%{http_code}")
 check_status $STATUS 404
 
 echo "DELETE utilisateur inexistant"
-STATUS=$(curl -s -X DELETE $BASE_URL/9999 \
+STATUS=$(curl -s -X DELETE $BASE_URL/000000000000000000000000 -o /dev/null \
   -w "%{http_code}")
 check_status $STATUS 404
+
+echo "GET id invalide (ObjectId)"
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE_URL/123)
+check_status $STATUS 400
+
+echo "PUT id invalide (ObjectId)"
+STATUS=$(curl -s -X PUT $BASE_URL/123 -o /dev/null \
+  -H "Content-Type: application/json" \
+  -d '{"role":"admin"}' \
+  -w "%{http_code}")
+check_status $STATUS 400
+
+echo "DELETE id invalide (ObjectId)"
+STATUS=$(curl -s -X DELETE $BASE_URL/123 -o /dev/null -w "%{http_code}")
+check_status $STATUS 400
+
+echo "OK: tous les tests ont réussi"
